@@ -7774,8 +7774,8 @@ class LDAPGroupSyncTest(ZulipTestCase):
     @override_settings(AUTHENTICATION_BACKENDS=("zproject.backends.ZulipLDAPAuthBackend",))
     def test_ldap_group_sync(self) -> None:
         self.init_default_ldap_database()
-
         hamlet = self.example_user("hamlet")
+
         with self.settings(LDAP_APPEND_DOMAIN="zulip.com"):
             result = sync_user_from_ldap(hamlet, mock.Mock())
             self.assertTrue(result)
@@ -7908,6 +7908,62 @@ class LDAPGroupSyncTest(ZulipTestCase):
                 'WARNING:django_auth_ldap:search_s("ou=groups,dc=zulip,dc=com", 1, "(&(objectClass=groupOfUniqueNames(uniqueMember=uid=cordelia,ou=users,dc=zulip,dc=com))", "None", 0) while authenticating cordelia',
             ],
         )
+        #testing description changes
+        with (
+            self.settings(
+                AUTH_LDAP_GROUP_SEARCH=LDAPSearch(
+                    "ou=groups,dc=zulip,dc=com",
+                    ldap.SCOPE_ONELEVEL,
+                    "(objectClass=groupOfUniqueNames)",
+                ),
+                LDAP_SYNCHRONIZED_GROUPS_BY_REALM={
+                    "zulip": [
+                        "cool_test_group",
+                    ]
+                },
+                LDAP_GROUP_DESCRIPTION_ATTR="description",
+                LDAP_APPEND_DOMAIN="zulip.com",
+            ),
+            self.assertLogs("zulip.ldap", "DEBUG") as zulip_ldap_log,
+        ):
+            self.mock_ldap.directory["cn=cool_test_group,ou=groups,dc=zulip,dc=com"] = {
+                "objectClass": ["groupOfUniqueNames"],
+                "cn": ["cool_test_group"],
+                "uniqueMember": [
+                    "uid=hamlet,ou=users,dc=zulip,dc=com",
+                    "uid=cordelia,ou=users,dc=zulip,dc=com"
+                ],
+                "description": "new ldap description"
+            }
+            sync_user_from_ldap(hamlet, mock.Mock())
+            self.assertTrue(NamedUserGroup.objects.get(realm=realm, name="cool_test_group").description == "new ldap description")
+
+            self.mock_ldap.directory["cn=cool_test_group,ou=groups,dc=zulip,dc=com"] = {
+                "objectClass": ["groupOfUniqueNames"],
+                "cn": ["cool_test_group"],
+                "uniqueMember": [
+                    "uid=hamlet,ou=users,dc=zulip,dc=com",
+                    "uid=cordelia,ou=users,dc=zulip,dc=com"
+                ],
+            }
+            sync_user_from_ldap(hamlet, mock.Mock())
+            self.assertTrue(NamedUserGroup.objects.get(realm=realm, name="cool_test_group").description == "new ldap description")
+        self.assertEqual(
+            zulip_ldap_log.output,
+            [
+                f"DEBUG:zulip.ldap:Syncing groups for user: {hamlet.id}",
+                "DEBUG:zulip.ldap:intended groups: {'cool_test_group'}; zulip groups: {'cool_test_group'}",
+                "DEBUG:zulip.ldap:intended group descriptions: {'cool_test_group': 'new ldap description', 'another_test_group': None}; zulip group descriptions: {'cool_test_group': 'Created by LDAP sync'}",
+                "DEBUG:zulip.ldap:Old description: Created by LDAP sync; New description: new ldap description",
+                "DEBUG:zulip.ldap:Old description: None; New description: None",
+                f"DEBUG:zulip.ldap:Syncing groups for user: {hamlet.id}",
+                "DEBUG:zulip.ldap:intended groups: {'cool_test_group'}; zulip groups: {'cool_test_group'}",
+                "DEBUG:zulip.ldap:intended group descriptions: {'cool_test_group': None, 'another_test_group': None}; zulip group descriptions: {'cool_test_group': 'new ldap description'}",
+                "DEBUG:zulip.ldap:Old description: new ldap description; New description: None",
+                "DEBUG:zulip.ldap:Old description: None; New description: None"
+                
+            ],
+        ) 
 
 
 # Don't load the base class as a test: https://bugs.python.org/issue17519.

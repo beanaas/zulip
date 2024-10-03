@@ -72,6 +72,7 @@ from zerver.actions.custom_profile_fields import do_update_user_custom_profile_d
 from zerver.actions.user_groups import (
     bulk_add_members_to_user_groups,
     bulk_remove_members_from_user_groups,
+    do_update_user_group_description
 )
 from zerver.actions.user_settings import do_regenerate_api_key
 from zerver.actions.users import do_change_user_role, do_deactivate_user
@@ -620,6 +621,36 @@ def email_belongs_to_ldap(realm: Realm, email: str) -> bool:
 
 
 ldap_logger = logging.getLogger("zulip.ldap")
+class LDAPGroupDescriptions(_LDAPUser):
+    """
+    This class is a workaround - we want to use
+    django-auth-ldap to query the ldap directory for
+    group descriptions,but it doesn't provide an API for that or an isolated class for handling
+    the connection. Because connection-handling is tightly integrated
+    into the _LDAPUser class, we have to make this strange inheritance here,
+    in order to be able to comfortably have an ldap connection and make search
+    queries.
+    
+    Same reason as LDAPReverseEmailSearch
+    """
+    def __init__(self) -> None:
+        # Superclass __init__ requires a username argument - it doesn't actually
+        # impact anything for us in this class, given its very limited use
+        # for only making a search query, so we pass an empty string.
+        super().__init__(LDAPBackend(), username="")
+
+    def get_descriptions(self) -> dict[str, str]:
+        group_description = {}
+        search = settings.AUTH_LDAP_GROUP_SEARCH
+        GROUP_DESCRIPTION_ATTR = settings.LDAP_GROUP_DESCRIPTION_ATTR
+        assert search is not None
+        results = search.execute(self.connection)
+        for group in results:
+            _, ci_dict = group
+            name = ci_dict["cn"][0]
+            description = ci_dict.get(GROUP_DESCRIPTION_ATTR, None)
+            group_description[name] = description
+        return group_description
 
 
 class LDAPReverseEmailSearch(_LDAPUser):
@@ -948,6 +979,7 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
             sync_user_profile_custom_fields(user_profile, values_by_var_name)
         except SyncUserError as e:
             raise ZulipLDAPError(str(e)) from e
+    
 
     def sync_groups_from_ldap(self, user_profile: UserProfile, ldap_user: _LDAPUser) -> None:
         """
@@ -957,12 +989,15 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
             to the LDAP groups ldap_user belongs to.
         (2) Makes sure the user doesn't have membership in the Zulip UserGroups corresponding
             to the LDAP groups ldap_user doesn't belong to.
+        (3) Makes sure the group descriptions of the Zulip UserGruoups corresponds to the descriptions
+            in LDAP.
         """
+
 
         if user_profile.realm.string_id not in settings.LDAP_SYNCHRONIZED_GROUPS_BY_REALM:
             # no groups to sync for this realm
             return
-
+        
         configured_ldap_group_names_for_sync = set(
             settings.LDAP_SYNCHRONIZED_GROUPS_BY_REALM[user_profile.realm.string_id]
         )
@@ -1017,6 +1052,28 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
                 bulk_remove_members_from_user_groups(
                     groups_for_membership_deletion, [user_profile.id], acting_user=None
                 )
+            if settings.LDAP_GROUP_DESCRIPTION_ATTR == None:
+                # no group descriptions to sync for this realm
+                return
+            
+            ldap_group_descriptions = LDAPGroupDescriptions().get_descriptions()
+            zulip_group_descriptions = {group.name: group.description for group in NamedUserGroup.objects.filter(realm=user_profile.realm, name__in=configured_ldap_group_names_for_sync)}
+            ldap_logger.debug(
+                "intended group descriptions: %s; zulip group descriptions: %s",
+                repr(ldap_group_descriptions),
+                repr(zulip_group_descriptions),
+            )
+            for group_name, ldap_description in ldap_group_descriptions.items():
+                zulip_description = zulip_group_descriptions.get(group_name)
+                ldap_logger.debug(
+                    "Old description: %s; New description: %s",
+                    zulip_description,
+                    ldap_description,
+                )
+                if ldap_description != None:
+                    if zulip_description != ldap_description:
+                        user_group = NamedUserGroup.objects.get(name=group_name, realm=user_profile.realm)
+                        do_update_user_group_description(user_group, ldap_description, acting_user=None)
 
         except Exception as e:
             raise ZulipLDAPError(str(e)) from e
@@ -1222,7 +1279,6 @@ class ZulipLDAPUserPopulator(ZulipLDAPAuthBackendBase):
         """
         # Obtain the django username from the ldap_user object:
         username = self.user_email_from_ldapuser(username, ldap_user)
-
         # We set the built flag (which tells django-auth-ldap whether the user object
         # was taken from the database or freshly built) to False - because in this codepath
         # the user we're syncing of course already has to exist in the database.
@@ -1272,7 +1328,6 @@ def catch_ldap_error(signal: Signal, **kwargs: Any) -> None:
         # The exception message can contain the password (if it was invalid),
         # so it seems better not to log that, and only use the original exception's name here.
         raise PopulateUserLDAPError(type(kwargs["exception"]).__name__)
-
 
 def sync_user_from_ldap(user_profile: UserProfile, logger: logging.Logger) -> bool:
     backend = ZulipLDAPUserPopulator()
