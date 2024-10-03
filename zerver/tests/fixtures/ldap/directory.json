@@ -87,8 +87,7 @@
         "cn": ["cool_test_group"],
         "uniqueMember": [
             "uid=hamlet,ou=users,dc=zulip,dc=com"
-        ],
-        "description": "original description"
+        ]
     },
     "cn=another_test_group,ou=groups,dc=zulip,dc=com": {
         "objectClass": ["groupOfUniqueNames"],

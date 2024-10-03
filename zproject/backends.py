@@ -978,8 +978,7 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
         try:
             sync_user_profile_custom_fields(user_profile, values_by_var_name)
         except SyncUserError as e:
-            raise ZulipLDAPError(str(e)) from e
-    
+            raise ZulipLDAPError(str(e)) from e    
 
     def sync_groups_from_ldap(self, user_profile: UserProfile, ldap_user: _LDAPUser) -> None:
         """
@@ -990,9 +989,8 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
         (2) Makes sure the user doesn't have membership in the Zulip UserGroups corresponding
             to the LDAP groups ldap_user doesn't belong to.
         (3) Makes sure the group descriptions of the Zulip UserGruoups corresponds to the descriptions
-            in LDAP.
+            in LDAP, if LDAP_GROUP_DESCRIPTION_ATTR is specified.
         """
-
 
         if user_profile.realm.string_id not in settings.LDAP_SYNCHRONIZED_GROUPS_BY_REALM:
             # no groups to sync for this realm
@@ -1279,6 +1277,7 @@ class ZulipLDAPUserPopulator(ZulipLDAPAuthBackendBase):
         """
         # Obtain the django username from the ldap_user object:
         username = self.user_email_from_ldapuser(username, ldap_user)
+
         # We set the built flag (which tells django-auth-ldap whether the user object
         # was taken from the database or freshly built) to False - because in this codepath
         # the user we're syncing of course already has to exist in the database.
@@ -1328,6 +1327,7 @@ def catch_ldap_error(signal: Signal, **kwargs: Any) -> None:
         # The exception message can contain the password (if it was invalid),
         # so it seems better not to log that, and only use the original exception's name here.
         raise PopulateUserLDAPError(type(kwargs["exception"]).__name__)
+
 
 def sync_user_from_ldap(user_profile: UserProfile, logger: logging.Logger) -> bool:
     backend = ZulipLDAPUserPopulator()
