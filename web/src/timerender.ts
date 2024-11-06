@@ -260,7 +260,7 @@ export function last_seen_status_from_date(last_active_date: Date): string {
     const current_date = new Date();
     const minutes = differenceInMinutes(current_date, last_active_date);
     if (minutes < 60) {
-        return $t({defaultMessage: "Active {minutes} minutes ago"}, {minutes});
+        return $t({defaultMessage: "Last connected {minutes} minutes ago"}, {minutes});
     }
 
     const days_old = difference_in_calendar_days(current_date, last_active_date, display_time_zone);
@@ -268,17 +268,17 @@ export function last_seen_status_from_date(last_active_date: Date): string {
 
     if (hours < 24) {
         if (hours === 1) {
-            return $t({defaultMessage: "Active an hour ago"});
+            return $t({defaultMessage: "Connected an hour ago"});
         }
-        return $t({defaultMessage: "Active {hours} hours ago"}, {hours});
+        return $t({defaultMessage: "Connected {hours} hours ago"}, {hours});
     }
 
     if (days_old === 1) {
-        return $t({defaultMessage: "Active yesterday"});
+        return $t({defaultMessage: "Connected yesterday"});
     }
 
     if (days_old < 90) {
-        return $t({defaultMessage: "Active {days_old} days ago"}, {days_old});
+        return $t({defaultMessage: "Connected {days_old} days ago"}, {days_old});
     } else if (
         days_old > 90 &&
         days_old < 365 &&
